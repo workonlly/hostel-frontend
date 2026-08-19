@@ -29,7 +29,7 @@ function useAuth() {
 
     // Validate session with the backend via HttpOnly cookie
     apiFetch("/api/auth/me", { method: "GET" })
-      .then((data) => {
+      .then((data: any) => {
         if (data?.success && data?.user) {
           // Refresh the stored user data (may have changed)
           localStorage.setItem("user", JSON.stringify({ ...data.user, role: "student" }));
