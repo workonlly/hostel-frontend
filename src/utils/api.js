@@ -6,17 +6,15 @@ export async function apiFetch(
   endpoint,
   options = {}
 ) {
-
+  // Role is non-sensitive display data stored in localStorage for routing.
+  // Tokens are in HttpOnly cookies and are sent automatically by the browser
+  // via credentials: "include" — we never read or forward them from JavaScript.
   let role = "";
-  let token = localStorage.getItem("token") || "";
   try {
     const userStr = localStorage.getItem("user");
     if (userStr) {
       const user = JSON.parse(userStr);
       role = user.role || "";
-      if (!token && user.token) {
-        token = user.token;
-      }
     }
   } catch (e) {
     // Ignore parse errors
@@ -26,11 +24,10 @@ export async function apiFetch(
     `${BASE_URL}${endpoint}`,
     {
       ...options,
-      credentials: "include",
+      credentials: "include", // sends HttpOnly cookies automatically
       headers: {
         "Content-Type": "application/json",
         role: role || "",
-        ...(token ? { Authorization: `Bearer ${token}`, token } : {}),
         ...(options.headers || {}),
       },
     }
@@ -51,11 +48,11 @@ export async function apiFetch(
     );
   }
 
-  /* ================= AUTO LOGOUT ================= */
-  const isAuthEndpoint = 
-    endpoint.startsWith("/api/auth/") || 
-    endpoint.includes("/login") || 
-    endpoint.includes("/send-otp") || 
+  /* ================= AUTO LOGOUT on expired session ================= */
+  const isAuthEndpoint =
+    endpoint.startsWith("/api/auth/") ||
+    endpoint.includes("/login") ||
+    endpoint.includes("/send-otp") ||
     endpoint.includes("/verify");
 
   if (!response.ok) {

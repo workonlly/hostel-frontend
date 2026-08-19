@@ -17,6 +17,15 @@ function Login() {
   const navigate =
     useNavigate();
 
+  // Redirect already-logged-in users away from the login page
+  useEffect(() => {
+    const role = localStorage.getItem("role")?.toLowerCase();
+    const user = localStorage.getItem("user");
+    if (role === "student" && user) {
+      navigate("/", { replace: true });
+    }
+  }, [navigate]);
+
 
 
   const [formData, setFormData] =
@@ -76,18 +85,13 @@ function Login() {
   };
 
   const persistAuth = (data) => {
-    const token = data.token || data.accessToken || data.user?.token || "";
-    if (token) {
-      localStorage.setItem("token", token);
-    }
+    // Only store non-sensitive display data — tokens live in HttpOnly cookies set by the server
     localStorage.setItem("role", "student");
-
     localStorage.setItem(
       "user",
       JSON.stringify({
         ...data.user,
         role: "student",
-        token: token || data.user?.token,
       })
     );
 
