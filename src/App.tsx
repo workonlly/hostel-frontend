@@ -7,57 +7,65 @@ import OutpassForm from "./students/outpass_form.jsx";
 import Dashboard from "./students/Dashboard";
 import { apiFetch } from "./utils/api";
 
-/**
- * On app startup, call /api/auth/me to silently validate the session
- * using the HttpOnly cookie. This means:
- *  - Tokens are NEVER stored in localStorage (secure by design)
- *  - Sessions survive browser close/reopen automatically
- *  - The cookie is rotated silently if the access token expired
- */
+import { initSessionSync } from "./utils/sessionSync";
+
 function useAuth() {
   const [authState, setAuthState] = useState<"loading" | "authenticated" | "unauthenticated">("loading");
 
   useEffect(() => {
-    const existingRole = localStorage.getItem("role")?.toLowerCase();
-    const existingUser = localStorage.getItem("user");
-
-    // Quick sync check: if no local data at all, skip the network call
-    if (!existingRole || !existingUser) {
-      setAuthState("unauthenticated");
-      return;
-    }
+    let isMounted = true;
 
     // Validate session with the backend via HttpOnly cookie
     apiFetch("/api/auth/me", { method: "GET" })
       .then((data: any) => {
+        if (!isMounted) return;
         if (data?.success && data?.user) {
-          // Refresh the stored user data (may have changed)
+          // Refresh the stored user data
           localStorage.setItem("user", JSON.stringify({ ...data.user, role: "student" }));
           localStorage.setItem("role", "student");
-          // Remove any tokens that may have been stored in the past
-          localStorage.removeItem("token");
-          localStorage.removeItem("refreshToken");
-          localStorage.removeItem("sessionId");
           setAuthState("authenticated");
         } else {
           // Session invalid — clear stale data
           localStorage.removeItem("user");
           localStorage.removeItem("role");
-          localStorage.removeItem("token");
-          localStorage.removeItem("refreshToken");
-          localStorage.removeItem("sessionId");
           setAuthState("unauthenticated");
         }
       })
       .catch(() => {
-        // Network error or 401 — treat as unauthenticated
+        if (!isMounted) return;
+        // Network error or 401 — check if local data exists as temporary fallback or mark unauthenticated
         localStorage.removeItem("user");
         localStorage.removeItem("role");
-        localStorage.removeItem("token");
-        localStorage.removeItem("refreshToken");
-        localStorage.removeItem("sessionId");
         setAuthState("unauthenticated");
       });
+
+    // Listen for cross-tab session events (login / logout / role conflict)
+    const cleanupSync = initSessionSync({
+      onLogout: () => {
+        if (isMounted) {
+          setAuthState("unauthenticated");
+        }
+      },
+      onLogin: (data: any) => {
+        if (isMounted && data?.role === "student") {
+          localStorage.setItem("user", JSON.stringify({ ...data.user, role: "student" }));
+          localStorage.setItem("role", "student");
+          setAuthState("authenticated");
+        }
+      },
+      onRoleConflict: () => {
+        if (isMounted) {
+          localStorage.removeItem("user");
+          localStorage.removeItem("role");
+          setAuthState("unauthenticated");
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      cleanupSync();
+    };
   }, []);
 
   return authState;

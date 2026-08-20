@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { apiFetch } from "../utils/api";
+import { broadcastSessionLogout } from "../utils/sessionSync";
 
 export default function StudentSidebar() {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ export default function StudentSidebar() {
     } catch (e) {
       console.error("Logout error", e);
     }
+    broadcastSessionLogout();
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     localStorage.removeItem("role");

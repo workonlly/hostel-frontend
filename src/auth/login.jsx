@@ -11,11 +11,10 @@ import {
 import {
   apiFetch,
 } from "../utils/api";
+import { broadcastSessionLogin } from "../utils/sessionSync";
 
 function Login() {
-
-  const navigate =
-    useNavigate();
+  const navigate = useNavigate();
 
   // Redirect already-logged-in users away from the login page
   useEffect(() => {
@@ -26,35 +25,18 @@ function Login() {
     }
   }, [navigate]);
 
+  const [formData, setFormData] = useState({
+    email: "",
+    password: "",
+  });
 
-
-  const [formData, setFormData] =
-    useState({
-
-      email: "",
-
-      password: "",
-
-      // role: "student",
-    });
-
-  const [error, setError] =
-    useState("");
-
-  const [loading, setLoading] =
-    useState(false);
-
-  const [otpPending, setOtpPending] =
-    useState(false);
-
-  const [otpRole, setOtpRole] =
-    useState("");
-
-  const [otp, setOtp] =
-    useState("");
-
-  const [otpCountdown, setOtpCountdown] =
-    useState(0);
+  const [error, setError] = useState("");
+  const [sessionConflict, setSessionConflict] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [otpPending, setOtpPending] = useState(false);
+  const [otpRole, setOtpRole] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpCountdown, setOtpCountdown] = useState(0);
 
   useEffect(() => {
     if (!otpPending || otpCountdown <= 0) return;
@@ -67,20 +49,17 @@ function Login() {
   }, [otpPending, otpCountdown]);
 
   /* ================= HANDLE CHANGE ================= */
-
-
   const handleChange = (e) => {
     if (e.target.name === "email" || e.target.name === "password") {
       setOtpPending(false);
       setOtp("");
       setOtpCountdown(0);
+      setSessionConflict(null);
     }
 
     setFormData({
       ...formData,
-
-      [e.target.name]:
-        e.target.value,
+      [e.target.name]: e.target.value,
     });
   };
 
@@ -95,86 +74,87 @@ function Login() {
       })
     );
 
-    navigate("/student");
+    // Broadcast login to all open tabs so they sync immediately
+    broadcastSessionLogin({
+      role: "student",
+      user: data.user,
+      sessionId: data.sessionId,
+    });
+
+    navigate("/");
   };
 
-  const submitLoginRequest = async () => {
+  const submitLoginRequest = async (forceLogout = false) => {
     const headers = {
       "Content-Type": "application/json",
     };
 
-    const data =
-      (await apiFetch("/api/auth/login", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          email: formData.email,
-          password: formData.password,
-          role: "student",
-        }),
-      })) || {};
+    setSessionConflict(null);
+    setError("");
 
-    if (data?.success && data?.message === "OTP generated") {
-      setOtpPending(true);
-      setOtpRole("student");
-      setOtp("");
-      setOtpCountdown(60);
-      setError("");
-      return { requiresOtp: true };
+    try {
+      const data =
+        (await apiFetch("/api/auth/login", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            email: formData.email,
+            password: formData.password,
+            role: "student",
+            forceLogout,
+          }),
+        })) || {};
+
+      if (data?.success && data?.message === "OTP generated") {
+        setOtpPending(true);
+        setOtpRole("student");
+        setOtp("");
+        setOtpCountdown(60);
+        setError("");
+        return { requiresOtp: true };
+      }
+
+      if (data?.user) {
+        persistAuth(data);
+        return { success: true };
+      }
+
+      throw new Error(data?.message || "Login failed");
+    } catch (err) {
+      if (err.data?.conflict || err.status === 409) {
+        setSessionConflict({
+          currentRole: err.data?.currentRole || "another role",
+          message: err.data?.message || err.message,
+        });
+      } else {
+        throw err;
+      }
     }
-
-    if (data?.user) {
-      persistAuth(data);
-      return { success: true };
-    }
-
-    throw new Error(data?.message || "Login failed");
   };
 
   /* ================= LOGIN ================= */
-
-  const handleLogin =
-    async (e) => {
-
-      e.preventDefault();
-
-      if (
-        !formData.email ||
-        !formData.password
-      ) {
-
-        setError(
-          "Please fill all fields"
-        );
-
-        return;
-      }
-
-      try {
-
-        setLoading(true);
-
-        setError("");
-
-        await submitLoginRequest();
-
-      } catch (err) {
-
-        console.error(err);
-
-        setError(
-          err.message ||
-          "Login failed"
-        );
-
-      } finally {
-
-        setLoading(false);
-      }
-    };
-
-  const handleVerifyOtp = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
+
+    if (!formData.email || !formData.password) {
+      setError("Please fill all fields");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError("");
+      await submitLoginRequest(false);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Login failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e, forceLogout = false) => {
+    if (e) e.preventDefault();
 
     if (!otp) {
       setError("Please enter the OTP");
@@ -184,6 +164,7 @@ function Login() {
     try {
       setLoading(true);
       setError("");
+      setSessionConflict(null);
 
       const data =
         (await apiFetch("/api/auth/verify-login-otp", {
@@ -192,6 +173,7 @@ function Login() {
             email: formData.email,
             otp,
             role: "student",
+            forceLogout,
           }),
         })) || {};
 
@@ -202,7 +184,14 @@ function Login() {
       persistAuth(data);
     } catch (err) {
       console.error(err);
-      setError(err.message || "OTP verification failed");
+      if (err.data?.conflict || err.status === 409) {
+        setSessionConflict({
+          currentRole: err.data?.currentRole || "another role",
+          message: err.data?.message || err.message,
+        });
+      } else {
+        setError(err.message || "OTP verification failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -217,12 +206,27 @@ function Login() {
     try {
       setLoading(true);
       setError("");
-      await submitLoginRequest();
+      await submitLoginRequest(false);
     } catch (err) {
       console.error(err);
       setError(err.message || "Failed to resend OTP");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForceSwitchAccount = async () => {
+    if (otpPending) {
+      await handleVerifyOtp(null, true);
+    } else {
+      try {
+        setLoading(true);
+        await submitLoginRequest(true);
+      } catch (err) {
+        setError(err.message || "Failed to switch accounts");
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -281,14 +285,42 @@ function Login() {
 
           </h2>
 
+          {/* SESSION CONFLICT BANNER */}
+          {sessionConflict && (
+            <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 mb-5 text-amber-900 text-sm">
+              <div className="font-semibold flex items-center gap-1.5 mb-1">
+                <svg className="w-5 h-5 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Active Session Detected
+              </div>
+              <p className="mb-3 text-xs leading-relaxed text-amber-800">
+                {sessionConflict.message || `An active session for '${sessionConflict.currentRole}' is currently running in this browser.`}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleForceSwitchAccount}
+                  disabled={loading}
+                  className="flex-1 bg-[#5b0e0e] text-white text-xs font-semibold py-2 px-3 rounded hover:bg-[#741616] transition disabled:opacity-50"
+                >
+                  Log out previous session & Proceed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSessionConflict(null)}
+                  className="border border-gray-300 text-gray-700 text-xs font-semibold py-2 px-3 rounded hover:bg-gray-100 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* ERROR */}
-
           {error && (
-
             <p className="text-red-500 text-sm mb-4">
-
               {error}
-
             </p>
           )}
 
